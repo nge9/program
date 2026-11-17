@@ -1,0 +1,4 @@
+PyQt6>=6.8,<7
+PyQt6-WebEngine>=6.8,<7
+zxing-cpp>=2.2,<4
+Pillow>=10,<13
