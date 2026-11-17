@@ -15,6 +15,7 @@ The first launch installs the required packages. Keep the window open while it f
 ## Use it
 
 - Click an app to open it in a tab. Use **+** to choose another app.
+- The browser bar has Back, Forward, Reload/Stop, an editable address, and fullscreen controls. Tabs keep your pages open while you switch.
 - Click **Add a platform** and enter its name and website link. A picture is optional.
 - Have a website QR code? Click **Read QR image** to get its link from a saved picture.
 - Open **Settings** to change workspace colors, text size, and the fullscreen shortcut.
@@ -32,6 +33,6 @@ py -m pip install -r requirements.txt
 py social_workspace.py
 ```
 
-Tested with 16 passing tests on Linux. Windows has not been tested here. Some websites may restrict embedded browsers or sign-in. Internet is required for websites and the first-time setup.
+Tested with 17 passing tests on Linux. Windows has not been tested here. Some websites may restrict embedded browsers or sign-in. Internet is required for websites and the first-time setup.
 
 The full app is in **social_workspace.py**. The other files are a launcher, dependencies, these instructions, and license notices. See **LICENSES.txt** for licensing.

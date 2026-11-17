@@ -157,14 +157,16 @@ import re
 import sys
 import uuid
 from contextlib import contextmanager
+from html import escape
 from pathlib import Path
 from urllib.parse import urlsplit, quote
 
 from PyQt6 import sip
-from PyQt6.QtCore import QBuffer, QByteArray, QObject, QUrl, Qt, pyqtSignal, pyqtSlot, QStandardPaths, QSaveFile, QIODevice, QEvent, QLockFile, QPropertyAnimation, QEasingCurve, QRect, QTimer, QRunnable, QThreadPool
+from PyQt6.QtCore import QBuffer, QByteArray, QObject, QUrl, Qt, pyqtSignal, pyqtSlot, QStandardPaths, QSaveFile, QIODevice, QEvent, QLockFile, QPropertyAnimation, QEasingCurve, QRect, QSize, QTimer, QRunnable, QThreadPool
 from PyQt6.QtGui import QAction, QIcon, QKeySequence, QShortcut, QColor, QPainter, QPixmap, QImage, QImageReader, QFont, QFontDatabase
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QStackedWidget, QTabWidget, QTabBar, QFileDialog, QSizePolicy, QDialog, QSizeGrip, QMenu, QWidgetAction, QSystemTrayIcon, QMessageBox, QLineEdit, QProgressBar)
+from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWebChannel import QWebChannel
 from PyQt6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage, QWebEngineSettings
 from PyQt6.QtWebEngineWidgets import QWebEngineView
@@ -651,11 +653,40 @@ class AppPictureDialog(QDialog):
         self.refresh_preview('Default platform icon')
 
 
+def chrome_icon(kind):
+    paths = {
+        'back': 'M15 5l-7 7 7 7M8 12h12',
+        'forward': 'M9 5l7 7-7 7M4 12h12',
+        'reload': 'M20 7v5h-5M19 12a7 7 0 1 0-2 5M20 7l-3-3',
+        'stop': 'M7 7l10 10M17 7L7 17',
+        'external': 'M14 4h6v6M20 4L10 14M10 4H5a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5',
+        'fullscreen': 'M9 4H4v5M15 4h5v5M4 15v5h5M20 15v5h-5',
+        'globe': 'M3 12h18M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18M12 3c-5 5-5 13 0 18M12 3c5 5 5 13 0 18',
+    }
+    result = QIcon()
+    for mode, color in [(QIcon.Mode.Normal, '#c0c4d6'), (QIcon.Mode.Disabled, '#50556a')]:
+        svg = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">'
+               '<path fill="none" stroke="' + color + '" stroke-width="1.7" '
+               'stroke-linecap="round" stroke-linejoin="round" d="' + paths[kind] + '"/></svg>')
+        pixmap = QPixmap(48, 48)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        QSvgRenderer(QByteArray(svg.encode())).render(painter)
+        painter.end()
+        pixmap.setDevicePixelRatio(2)
+        result.addPixmap(pixmap, mode)
+    return result
+
+
 class BrowserTab(QWidget):
     def __init__(self, workspace, app=None):
         super().__init__()
+        self.workspace = workspace
         self.app_id = app['id'] if app else None
         self.app_name = app['name'] if app else 'New app'
+        self.loading = False
+        self.user_stopped = False
+        self.load_generation = 0
         self.browser = workspace.make_browser(self)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -663,57 +694,168 @@ class BrowserTab(QWidget):
         self.toolbar = QWidget()
         self.toolbar.setObjectName('browserToolbar')
         tools = QHBoxLayout(self.toolbar)
-        tools.setContentsMargins(12, 7, 12, 7)
-        for label, callback, title in [
-            ('←', self.browser.back, 'Back'), ('→', self.browser.forward, 'Forward'),
-            ('↻', self.browser.reload, 'Reload')]:
-            button = QPushButton(label)
+        tools.setContentsMargins(16, 10, 16, 10)
+        tools.setSpacing(5)
+
+        def tool(kind, title, callback):
+            button = QPushButton()
+            button.setObjectName('browserTool')
+            button.setIcon(chrome_icon(kind))
+            button.setIconSize(QSize(19, 19))
+            button.setFixedSize(36, 36)
             button.setToolTip(title)
+            button.setAccessibleName(title)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
             button.clicked.connect(callback)
             tools.addWidget(button)
+            return button
+
+        self.back_button = tool('back', 'Back', self.browser.back)
+        self.forward_button = tool('forward', 'Forward', self.browser.forward)
+        self.reload_button = tool('reload', 'Reload page', self.reload_or_stop)
         self.address = QLineEdit()
-        self.address.setPlaceholderText('Website address')
+        self.address.setPlaceholderText('Search your apps from +, or enter a website address')
         self.address.setAccessibleName('Website address')
         self.address.setClearButtonEnabled(True)
         self.address.returnPressed.connect(self.go_to_address)
         self.address.setObjectName('address')
         self.address.setMinimumWidth(0)
-        self.address.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.address.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.address.addAction(chrome_icon('globe'), QLineEdit.ActionPosition.LeadingPosition)
         tools.addWidget(self.address, 1)
-        self.status = QLabel('')
-        self.status.setObjectName('loadStatus')
+        tool('external', 'Open this address in a separate window', self.open_in_window)
+        tool('fullscreen', 'Website fullscreen', lambda: workspace.set_website_fullscreen(
+            self.browser, not getattr(workspace, '_website_fullscreen', False)))
         layout.addWidget(self.toolbar)
+
+        # Keep this track at a fixed height even when idle: loading must never
+        # make the website jump up or down or resize its viewport.
         self.progress = QProgressBar()
         self.progress.setObjectName('pageProgress')
         self.progress.setRange(0, 100)
+        self.progress.setValue(0)
         self.progress.setTextVisible(False)
         self.progress.setFixedHeight(2)
-        self.progress.hide()
-        self.browser.loadStarted.connect(lambda: self.progress.show())
-        self.browser.loadProgress.connect(self.progress.setValue)
-        self.browser.loadFinished.connect(lambda _: self.progress.hide())
+        self.progress_animation = QPropertyAnimation(self.progress, b'value', self)
+        self.progress_animation.setDuration(180)
+        self.progress_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
         layout.addWidget(self.progress)
+        self.status = QLabel('')
+        self.status.setObjectName('loadStatus')
+        self.status.setTextFormat(Qt.TextFormat.PlainText)
+        self.status.setWordWrap(True)
+        self.status.setFixedHeight(0)
         layout.addWidget(self.status)
         layout.addWidget(self.browser, 1)
-        self.browser.urlChanged.connect(lambda url: self.address.setText(url.toDisplayString()))
-        self.browser.loadStarted.connect(lambda: self.status.setText('Loading…'))
-        self.browser.loadFinished.connect(lambda ok: self.status.setText(
-            '' if ok else 'Page could not load. Check your connection or retry.'))
+        self.browser.urlChanged.connect(self.url_changed)
+        self.browser.titleChanged.connect(self.update_title)
+        self.browser.iconChanged.connect(self.update_icon)
+        self.browser.loadStarted.connect(self.load_started)
+        self.browser.loadProgress.connect(self.load_progress)
+        self.browser.loadFinished.connect(self.load_finished)
+        self.update_history()
+
+    def update_history(self):
+        self.back_button.setEnabled(self.browser.history().canGoBack())
+        self.forward_button.setEnabled(self.browser.history().canGoForward())
+
+    def url_changed(self, url):
+        # Redirects should not replace an address the user is currently typing.
+        if not self.address.hasFocus():
+            self.address.setText(url.toDisplayString())
+        self.update_history()
+
+    def update_title(self, title):
+        index = self.workspace.browser_tabs.indexOf(self)
+        if index >= 0:
+            self.workspace.browser_tabs.setTabToolTip(index, escape(self.app_name + (' — ' + title if title else '')))
+
+    def update_icon(self, icon):
+        if icon.isNull():
+            return
+        record = next((a for a in self.workspace.store.apps if a['id'] == self.app_id), None)
+        if record and record['icon'].startswith('data:'):
+            return  # Keep a user-chosen picture, including the built-in WhatsApp mark.
+        index = self.workspace.browser_tabs.indexOf(self)
+        if index >= 0:
+            self.workspace.browser_tabs.setTabIcon(index, icon)
+
+    def animate_progress(self, value):
+        self.progress_animation.stop()
+        self.progress_animation.setStartValue(self.progress.value())
+        self.progress_animation.setEndValue(value)
+        self.progress_animation.start()
+
+    def load_started(self):
+        self.loading = True
+        self.user_stopped = False
+        self.load_generation += 1
+        self.progress_animation.stop()
+        self.progress.setValue(0)
+        self.animate_progress(8)
+        self.status.clear()
+        self.status.setFixedHeight(0)
+        self.reload_button.setIcon(chrome_icon('stop'))
+        self.reload_button.setToolTip('Stop loading')
+        self.reload_button.setAccessibleName('Stop loading')
+
+    def load_progress(self, value):
+        if self.loading:
+            self.animate_progress(max(self.progress.value(), min(value, 96)))
+
+    def load_finished(self, ok):
+        self.loading = False
+        self.animate_progress(100)
+        self.finish_generation = self.load_generation
+        self.finish_timer = getattr(self, 'finish_timer', None) or QTimer(self)
+        if not self.finish_timer.isSingleShot():
+            self.finish_timer.setSingleShot(True)
+            self.finish_timer.timeout.connect(self.clear_progress)
+        self.finish_timer.start(280)
+        self.reload_button.setIcon(chrome_icon('reload'))
+        self.reload_button.setToolTip('Reload page')
+        self.reload_button.setAccessibleName('Reload page')
+        if not ok and not self.user_stopped:
+            self.show_error('This page could not load. Check your connection, then use Reload to try again.')
+        self.update_history()
+
+    def clear_progress(self):
+        if self.finish_generation == self.load_generation and not self.loading:
+            self.progress_animation.stop()
+            self.progress.setValue(0)
+
+    def show_error(self, message):
+        self.status.setText(message)
+        self.status.setFixedHeight(max(34, self.status.fontMetrics().height() * 2 + 12))
+
+    def reload_or_stop(self):
+        if self.loading:
+            self.user_stopped = True
+            self.browser.stop()
+        else:
+            self.browser.reload()
+
+    def open_in_window(self):
+        url = self.browser.url()
+        if url.scheme() not in ('http', 'https'):
+            return
+        record = next((a for a in self.workspace.store.apps if a['id'] == self.app_id), None)
+        self.workspace.new_floating(record).setUrl(url)
 
     def go_to_address(self):
         try:
             url = normalize_url(self.address.text())
         except ValueError as exc:
-            self.status.setText(str(exc))
+            self.show_error(str(exc))
             return
         self.browser.setUrl(QUrl(url))
         self.browser.setFocus()
 
     def set_compact(self, enabled):
         if enabled and not hasattr(self, '_chrome_visibility'):
-            self._chrome_visibility = [(w, not w.isHidden()) for w in (self.toolbar, self.status)]
-            self.toolbar.hide()
-            self.status.hide()
+            self._chrome_visibility = [(w, not w.isHidden()) for w in (self.toolbar, self.status, self.progress)]
+            for widget, _ in self._chrome_visibility:
+                widget.hide()
         elif not enabled and hasattr(self, '_chrome_visibility'):
             for widget, visible in self._chrome_visibility:
                 widget.setVisible(visible)
@@ -726,6 +868,7 @@ class SmoothTabBar(QTabBar):
         super().__init__(parent)
         self.marker = QWidget(self)
         self.marker.setObjectName('tabMarker')
+        self.marker.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.marker.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.marker.hide()
         self.animation = QPropertyAnimation(self.marker, b'geometry', self)
@@ -834,6 +977,7 @@ class Workspace(QMainWindow):
                 self.browser_tabs.setObjectName('appTabs')
                 self.browser_tabs.setTabBar(SmoothTabBar())
                 self.browser_tabs.setDocumentMode(True)
+                self.browser_tabs.setIconSize(QSize(18, 18))
                 self.browser_tabs.setTabsClosable(False)
                 self.browser_tabs.setMovable(True)
                 self.browser_tabs.tabBar().setExpanding(False)
@@ -841,7 +985,7 @@ class Workspace(QMainWindow):
                 self.browser_tabs.tabBar().setUsesScrollButtons(True)
                 choose_app = QPushButton('＋')
                 choose_app.setObjectName('newTabButton')
-                choose_app.setFixedSize(38, 36)
+                choose_app.setFixedSize(46, 64)
                 choose_app.setToolTip('Choose another app for a new tab')
                 choose_app.setAccessibleName('Choose another app')
                 choose_app.clicked.connect(lambda: self.navigate('dashboard'))
@@ -926,7 +1070,9 @@ class Workspace(QMainWindow):
         close = QPushButton()
         close.setObjectName('tabClose')
         close.setFixedSize(22, 22)
-        close.setIcon(self.window_control_icon('×'))
+        close.setIcon(chrome_icon('stop'))
+        close.setIconSize(QSize(14, 14))
+        close.setCursor(Qt.CursorShape.PointingHandCursor)
         close.setToolTip('Close ' + tab.app_name)
         close.setAccessibleName('Close ' + tab.app_name)
         close.clicked.connect(lambda: self.close_tab(self.browser_tabs.indexOf(tab)))
@@ -1085,6 +1231,7 @@ class Workspace(QMainWindow):
     def make_browser(self, parent):
         view = QWebEngineView(parent)
         page = BrowserPage(self.profile, view, self.new_floating)
+        page.setBackgroundColor(QColor('#101116'))
         view.setPage(page)
         self.remote_pages.append(page)
         page.destroyed.connect(lambda: self.remote_pages.remove(page) if page in self.remote_pages else None)
@@ -1367,16 +1514,20 @@ class Workspace(QMainWindow):
             'QPushButton:focus { border-color: ' + s['secondary'] + '; }'
             'QPushButton#floatButton { color: #9295a6; border-color: transparent; }'
             'QPushButton#floatButton:hover { color: ' + s['secondary'] + '; background: #252630; }'
-            'QWidget#browserToolbar { background: #151720; border-bottom: 1px solid #282c3b; padding: 4px; }'
-            'QWidget#browserToolbar QPushButton { background: transparent; border-color: transparent; border-radius: 9px; min-width: 20px; padding: 7px; }'
+            'QWidget#browserToolbar { background: #161820; border-bottom: none; }'
+            'QPushButton#browserTool { background: transparent; border: 1px solid transparent; border-radius: 11px; padding: 0; }'
+            'QPushButton#browserTool:hover { background: #292c3a; border-color: #35394a; }'
+            'QPushButton#browserTool:pressed { background: #363346; }'
+            'QPushButton#browserTool:disabled { background: transparent; border-color: transparent; }'
             'QWidget#browserToolbar QPushButton:hover { background: #282c3b; }'
-            'QProgressBar#pageProgress { border: none; background: #1c1e28; }'
+            'QProgressBar#pageProgress { border: none; background: #161820; }'
             'QProgressBar#pageProgress::chunk { background: ' + s['secondary'] + '; }'
-            'QPushButton#newTabButton { background: transparent; border: none; font-size: 22px; padding: 0; margin-right: 6px; border-radius: 10px; color: #b4b1ca; }'
+            'QPushButton#newTabButton { background: transparent; border: none; font-size: 22px; padding: 0; margin: 14px 5px; border-radius: 10px; color: #b4b1ca; }'
             'QPushButton#newTabButton:hover { background: #292735; color: white; }'
-            'QLineEdit#address { color: #b0b3c5; padding: 9px 16px; background: #1c1e28; border: 1px solid #2a2e3e; border-radius: 12px; margin: 5px 10px; selection-background-color: #605091; }'
+            'QLineEdit#address { color: #c4c7d8; padding: 10px 12px; background: #101219; border: 1px solid #2b2e3d; border-radius: 13px; margin: 0 10px; selection-background-color: #605091; }'
+            'QLineEdit#address:hover { border-color: #454557; }'
             'QLineEdit#address:focus { border-color: ' + s['secondary'] + '; }'
-            'QLabel#loadStatus { color: #9b9dab; padding-left: 12px; font-size: 10px; }'
+            'QLabel#loadStatus { color: #f0bbc7; background: #2a1e2a; padding: 6px 18px; font-size: 12px; }'
             'QMenu { border: 1px solid #343540; border-radius: 10px; padding: 7px; }'
             'QMenu::item { padding: 10px 15px; border-radius: 6px; }'
             'QMenu::item:selected { background: #262730; }'
@@ -1387,11 +1538,12 @@ class Workspace(QMainWindow):
             'QTabBar { background: #13151d; qproperty-drawBase: 0; }'
             'QTabBar::tab { background: transparent; color: #a5a8ba; '
             'border: 1px solid transparent; border-radius: 10px; '
-            'padding: 12px 16px; margin: 8px 3px 8px 3px; '
-            'min-width: 100px; max-width: 210px; font-weight: 500; }'
-            'QTabBar::tab:selected { color: #f5f3ff; background: #292735; '
+            'padding: 13px 18px; margin: 9px 4px 8px 4px; '
+            'min-width: 120px; max-width: 220px; font-weight: 600; }'
+            'QTabBar::tab:selected { color: #f5f3ff; background: #2a2739; '
             'border-color: #454054; font-weight: 600; }'
             'QTabBar::tab:!selected:hover { color: #f3f3f7; background: #20232e; }'
+            'QTabBar QToolButton { background: #1e202c; color: #c4c7d8; border: 1px solid #363848; border-radius: 7px; margin: 5px 0; }'
             'QWidget#tabMarker { background: ' + s['secondary'] + '; border-radius: 1px; }'
             'QWidget#fullscreenBar { background: #16171f; border-bottom: 1px solid #30313b; }'
             'QLabel#fullscreenTitle { background: transparent; font-weight: 600; font-size: 11px; }'
