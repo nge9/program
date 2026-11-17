@@ -1,38 +1,35 @@
-# Social Workspace
+# Social Workspace · Rust preview
 
-Keep your favorite websites together in one desktop app.
+Your favorite websites in one desktop workspace.
 
-![Social Workspace dashboard with platform cards and an Add a platform button](screenshot.png)
+![Social Workspace design preview](screenshot.png)
 
 ## Run on Windows
 
-1. Install [Python 3.12, 64-bit](https://www.python.org/downloads/windows/).
-2. Click **Code → Download ZIP** above, then extract it.
-3. Open the extracted folder and double-click **START-WINDOWS.bat**.
+1. Install [Rust](https://rustup.rs/) and [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with **Desktop development with C++**.
+2. Click **Code → Download ZIP**, then extract it.
+3. Double-click **START-WINDOWS.bat**. The first build can take a few minutes.
 
-The first launch installs the required packages. Keep the window open while it finishes.
+Windows needs [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/). It is usually already installed.
 
-## Use it
-
-- Click an app to open it in a tab. Use **+** to choose another app.
-- The browser bar has Back, Forward, Reload/Stop, an editable address, and fullscreen controls. Tabs keep your pages open while you switch.
-- Click **Add a platform** and enter its name and website link. A picture is optional.
-- Have a website QR code? Click **Read QR image** to get its link from a saved picture.
-- Open **Settings** to change workspace colors, text size, and the fullscreen shortcut.
-- Hover over an app card: use the pencil to change its picture, the trash icon to remove it, or the arrow to open a separate window.
-- **F11** toggles website fullscreen. **Ctrl+Tab** switches tabs.
-
-Apps, settings, and website sessions are saved locally. QR images are read on your device.
-
-## Run manually
-
-Open a terminal in this folder:
+You can also open a terminal in this folder and run:
 
 ```bat
-py -m pip install -r requirements.txt
-py social_workspace.py
+cargo run --release
 ```
 
-Tested with 17 passing tests on Linux. Windows has not been tested here. Some websites may restrict embedded browsers or sign-in. Internet is required for websites and the first-time setup.
+## What it does
 
-The full app is in **social_workspace.py**. The other files are a launcher, dependencies, these instructions, and license notices. See **LICENSES.txt** for licensing.
+- Opens websites in workspace tabs and separate windows.
+- Adds platforms with a name, a website link or QR image, and an optional picture.
+- Changes or removes any platform, including built-in ones.
+- Saves platforms, pictures, settings, and browser data locally.
+- Customizes workspace colors and text size.
+
+## Preview status
+
+This is the approved Rust design preview, replacing the Python version. The picture shows the interface with example open tabs, not signed-in accounts.
+
+The Rust source passes a Windows-target compile check and 3 core tests on Linux. The interface preview passed navigation, search, tabs, text-size, and removal checks. **The Windows desktop app has not been run here.** Website-focus shortcuts, popup sign-in, downloads, notifications, and installer packaging still need verification or completion. Some sites may restrict embedded browsers.
+
+The previous Python version remains in the repository history. See **LICENSES.txt** for notices.

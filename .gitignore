@@ -1,0 +1,3 @@
+/target/
+*.log
+workspace_apps.json
