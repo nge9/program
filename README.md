@@ -2,6 +2,8 @@
 
 Keep your favorite websites together in one desktop app.
 
+![Social Workspace dashboard with platform cards and an Add a platform button](screenshot.png)
+
 ## Run on Windows
 
 1. Install [Python 3.12, 64-bit](https://www.python.org/downloads/windows/).
