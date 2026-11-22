@@ -2,6 +2,7 @@
 #[cfg(target_os = "windows")]
 mod desktop;
 mod model;
+mod protection;
 fn main() {
     #[cfg(target_os = "windows")]
     if let Err(error) = desktop::run() {

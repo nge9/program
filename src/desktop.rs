@@ -1,5 +1,7 @@
 use crate::model::{self, Config, Platform, Settings};
+use crate::protection::{self, Protection};
 use serde_json::{json, Value};
+use std::rc::Rc;
 use std::{collections::HashMap, path::PathBuf};
 use tao::{
     dpi::LogicalSize,
@@ -34,6 +36,7 @@ struct Desktop {
     tabs: Vec<Tab>,
     floating: HashMap<WindowId, Floating>,
     context: WebContext,
+    protection: Rc<Protection>,
     window: Window,
     config: Config,
     file: PathBuf,
@@ -93,6 +96,7 @@ impl Desktop {
             tabs: Vec::new(),
             floating: HashMap::new(),
             context: WebContext::new(Some(dir.join("browser"))),
+            protection: Rc::new(Protection::bundled()?),
             window,
             config,
             file,
@@ -149,11 +153,13 @@ impl Desktop {
             let pop = self.proxy.clone();
             // Remote content has no workspace IPC handler and cannot read configuration.
             let view = WebViewBuilder::new_with_web_context(&mut self.context)
-                .with_url(&app.url)
+                .with_url("about:blank")
                 .with_background_color((16, 19, 27, 255))
                 .with_bounds(self.bounds)
                 .with_on_page_load_handler(move |_, url| {
-                    let _ = p.send_event(Message::Location(tab_id.clone(), url));
+                    if url.starts_with("http://") || url.starts_with("https://") {
+                        let _ = p.send_event(Message::Location(tab_id.clone(), url));
+                    }
                 })
                 .with_new_window_req_handler(move |url, _| {
                     let _ = pop.send_event(Message::Popup(url));
@@ -161,6 +167,8 @@ impl Desktop {
                 })
                 .build_as_child(&self.window)
                 .map_err(|e| e.to_string())?;
+            protection::attach(&view, self.protection.clone())?;
+            view.load_url(&app.url).map_err(|e| e.to_string())?;
             self.tabs.push(Tab {
                 view,
                 id: id.into(),
@@ -187,9 +195,11 @@ impl Desktop {
             .build(target)
             .map_err(|e| e.to_string())?;
         let view = WebViewBuilder::new_with_web_context(&mut self.context)
-            .with_url(url)
+            .with_url("about:blank")
             .build(&window)
             .map_err(|e| e.to_string())?;
+        protection::attach(&view, self.protection.clone())?;
+        view.load_url(&url).map_err(|e| e.to_string())?;
         self.floating.insert(
             window.id(),
             Floating {
