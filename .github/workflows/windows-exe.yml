@@ -1,0 +1,84 @@
+name: Build Windows EXE
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - src/**
+      - ui/**
+      - LICENSES.txt
+      - .github/workflows/windows-exe.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-exe-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    env:
+      CARGO_TERM_COLOR: always
+      RUSTFLAGS: -C target-feature=+crt-static
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Rust
+        shell: pwsh
+        run: |
+          rustup toolchain install stable --profile minimal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustup default stable
+          cargo --version
+      - name: Test on Windows
+        run: cargo test --locked --release
+      - name: Build Windows executable
+        run: cargo build --locked --release
+      - name: Package downloads
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist, portable | Out-Null
+          Copy-Item target/release/social-workspace.exe dist/SocialWorkspace.exe
+          Copy-Item dist/SocialWorkspace.exe portable/SocialWorkspace.exe
+          Copy-Item LICENSES.txt portable/LICENSES.txt
+          @'
+          SOCIAL WORKSPACE - WINDOWS PREVIEW
+
+          Double-click SocialWorkspace.exe. Rust and Visual Studio are not needed.
+          Microsoft Edge WebView2 Runtime must be present (usually already installed
+          on Windows). If it is missing, get it from Microsoft's WebView2 website.
+
+          Ad and tracker blocking is built in and always on. No Brave or extension
+          is required. Some ads may remain. Internet is needed for your websites.
+
+          This is a preview build. Site sign-in, popup compatibility and all desktop
+          interactions have not been exhaustively tested. See the repository README.
+
+          Source: https://github.com/nge9/program
+          '@ | Set-Content -Encoding utf8 portable/START-HERE.txt
+          Compress-Archive -Path portable/* -DestinationPath dist/SocialWorkspace-Windows.zip
+          Get-ChildItem dist/*.exe, dist/*.zip | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+            "$hash  $($_.Name)"
+          } | Set-Content -Encoding ascii dist/SHA256SUMS.txt
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SocialWorkspace-Windows-x64
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
+      - name: Publish preview download
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "windows-preview-${{ github.run_number }}"
+          $notes = "Windows x64 preview built and unit-tested on Windows from commit $env:GITHUB_SHA. Download SocialWorkspace.exe, or the ZIP with instructions and licenses. Rust and Visual Studio are not required to run it. Microsoft Edge WebView2 Runtime is required. The UI and ad-blocking rules are bundled. Complete UI and website compatibility testing is still pending. This executable is not code-signed."
+          gh release create $tag dist/SocialWorkspace.exe dist/SocialWorkspace-Windows.zip dist/SHA256SUMS.txt --repo "$env:GITHUB_REPOSITORY" --target "$env:GITHUB_SHA" --title "Social Workspace - Windows preview ${{ github.run_number }}" --notes $notes --prerelease
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
