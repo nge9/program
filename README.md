@@ -10,20 +10,19 @@ Your favorite websites in one desktop workspace.
 
 Or get the **[ZIP with instructions and licenses](https://github.com/nge9/program/releases/download/windows-preview-1/SocialWorkspace-Windows.zip)**.
 
-Download and double-click the executable. **You do not need Rust or Visual Studio.** This is an unsigned Windows x64 preview.
+The executable is an additional download; all Rust source files and build tools remain available below. Double-click it to run without compiling. This is an unsigned Windows x64 preview.
 
 It requires [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/), which is usually already installed on Windows.
 
-<details>
-<summary>Build from source instead</summary>
+## Build from source
 
-Install [Rust](https://rustup.rs/) and Visual Studio Build Tools with **Desktop development with C++**. Download the source ZIP, extract it, and double-click **START-WINDOWS.bat**, or run:
+1. Install [Rust](https://rustup.rs/) and [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with **Desktop development with C++**.
+2. Click **Code → Download ZIP**, then extract it. All source files are included.
+3. Double-click **START-WINDOWS.bat**, or run:
 
 ```bat
 cargo run --release --locked
 ```
-
-</details>
 
 ## What it does
 
